@@ -39,6 +39,58 @@ const tick=()=>new Promise(r=>setTimeout(r,0));
 const isRtl=s=>{const ar=(s.match(/[؀-ۿ]/g)||[]).length; const lat=(s.match(/[A-Za-z]/g)||[]).length; return ar>lat};
 const $=id=>document.getElementById(id);
 
+/* ---------- Sources, in your order of authority ---------- */
+const SOURCES=[
+  {id:'ram',label:'Royal Air Maroc'},
+  {id:'boeing',label:'Boeing 737'},
+  {id:'dgac',label:'DGAC Morocco'},
+  {id:'icao',label:'ICAO'},
+  {id:'easa',label:'EASA'},
+  {id:'faa',label:'FAA'},
+  {id:'uk',label:'UK CAA'},
+  {id:'airline',label:'Other airlines'},
+  {id:'other',label:'Unsorted'},
+  {id:'knowledge',label:'Background knowledge'},
+];
+const SRC_RANK=Object.fromEntries(SOURCES.map((s,i)=>[s.id,i]));
+const srcLabel=id=>(SOURCES.find(s=>s.id===id)||SOURCES[8]).label;
+const SRC_RULES=[
+  ['ram',{test:t=>/royal\s*air\s*maroc/i.test(t)||/\bRAM\b|\bRAM[_-]|\bRAM(OM|OPS|FOM)/.test(t)}, /royal\s*air\s*maroc|الخطوط الملكية المغربية/i,1],
+  ['boeing',/boeing|\bB?-?7(37|3[78M])\b|\bFCOM\b|\bFCTM\b|\bQRH\b|\bDDG\b|\bMMEL\b/i, /boeing\s*(737|commercial)|737[- ]?(600|700|800|900|MAX|8)|flight crew operations manual|quick reference handbook|flight crew training manual/i,2],
+  ['dgac',/\bDGAC\b|\bRACM\b|morocc|\bmaroc\b|المغرب/i, /direction g[ée]n[ée]rale de l.aviation civile|royaume du maroc|المديرية العامة للطيران المدني/i,2],
+  ['icao',/\bICAO\b|\bOACI\b|annexe?\s*\d|\bDoc\s*\d{4}\b|\bPANS\b/i, /international civil aviation organization|organisation de l.aviation civile internationale|\bICAO\b|\bOACI\b/i,4],
+  ['easa',/\bEASA\b|\bAMC\b|easy access rules|part[- ]?(ORO|CAT|FCL|ORA|ARO|SPA)\b|\bCS[- ]?25\b/i, /european union aviation safety agency|\bEASA\b/i,4],
+  ['faa',/\bFAA\b|advisory circular|\bAC[ _-]?\d{2,3}[-–]|14 ?CFR|\bAIM\b|\bFAR\b/i, /federal aviation administration|advisory circular|14 CFR/i,3],
+  ['uk',/\bUK\s*CAA\b|\bCAA\b|\bCAP[ _-]?\d{3,4}\b/i, /UK civil aviation authority|caa\.co\.uk|\bCAP\s?\d{3,4}\b/i,3],
+  ['knowledge',/mermoz|\bESMA\b|oxford|jeppesen|\bATPL\b|\bcours\b|course|textbook|manuel de|principles of flight|m[ée]t[ée]o|human performance|aviation exam|ab initio/i, /oxford aviation|jeppesen|mermoz|\bESMA\b|\bATPL\b/i,2],
+  ['airline',/airlines?|airways|air\s?france|lufthansa|emirates|qatar|ryanair|easyjet|turkish|saudia|transavia|\bFOM\b|\bOM[- ]?[ABCD]\b|operations manual/i, /\bairlines\b|\bairways\b/i,4],
+];
+function detectSource(title,file,text){
+  const name=(title||'')+' '+(file||'');
+  for(const [id,tr] of SRC_RULES) if(tr.test(name)) return id;
+  const hay=(text||'').slice(0,8000);
+  for(const [id,,xr,min] of SRC_RULES){ const n=(hay.match(new RegExp(xr.source,'gi'))||[]).length; if(n>=min) return id }
+  return 'other';
+}
+const srcOf=bookId=>{const b=books.find(b=>b.id===bookId); return b&&SRC_RANK[b.source]!=null?b.source:'other'};
+/* What kind of passage: checklist, procedure, limitation, definition */
+const KINDS=[
+  ['checklist','Checklist',/\bchecklists?\b|\bQRH\b|non[- ]?normal|memory items?|\bcondition\s*:|\bobjective\s*:|\.{6,}|▶|\bNNC\b|liste de v[ée]rification|check-?list/i],
+  ['procedure','Procedure',/\bprocedures?\b|proc[ée]dures?|\bPF\b|\bPM\b|pilot flying|pilot monitoring|\bcrew (shall|should|must)\b|\bthe captain (shall|should|must)\b|[ée]quipage doit|\bstep \d/i],
+  ['limitation','Limitation',null],
+  ['definition','Definition',/\bis defined as\b|\bdefinitions?\b|\bmeans\b|\brefers to\b|se d[ée]finit|d[ée]signe|est d[ée]fini|يقصد|تعريف/i],
+];
+const KIND_BOOST={checklist:1.6,procedure:1.4,limitation:1.2,definition:1.1,none:1};
+const NUM_RE=/\b\d+(?:[.,]\d+)?\s?(?:ft|feet|NM|nm|kts?|knots|min(?:utes)?|hours?|h\b|°\s?C|%|km|hPa|mb|FL\s?\d{2,3}|m\b)/gi;
+function kindOf(text){
+  for(const [id,,re] of KINDS){
+    if(id==='limitation'){ if((text.match(NUM_RE)||[]).length>=2||/\blimitations?\b|\bminimums?\b|\bmaximum\b|\bnot exceed\b|\bprohibited\b|\binterdit\b|\bne doit pas d[ée]passer\b/i.test(text)) return id; continue }
+    if(re.test(text)) return id;
+  }
+  return 'none';
+}
+const kindLabel=k=>(KINDS.find(x=>x[0]===k)||[,''])[1];
+
 /* ---------- Library state + word index ---------- */
 let books=[], passages=[], byBook=new Map(), index=new Map(), lens=[], flats=[], avgLen=1, vocab=null;
 let selected=new Set(), usingSamples=false;
@@ -406,7 +458,7 @@ async function addFiles(files){
       else throw new Error('This file type isn’t supported. Use PDF, EPUB, DOCX, TXT or Markdown.');
       const list=cut(r.segs);
       if(list.reduce((a,p)=>a+p.text.length,0)<200) throw new Error(ext==='pdf'?'No text found in this PDF. It is probably scanned pages (pictures of text). Run it through a text-recognition (OCR) tool first, then add it again.':'No readable text found in this file.');
-      const book={id:uid(),title:r.title||cleanTitle(file.name),file:file.name,kind:ext,addedAt:Date.now(),units:r.units,unitName:r.unitName||null,count:list.length,size:file.size,
+      const book={id:uid(),title:r.title||cleanTitle(file.name),file:file.name,kind:ext,addedAt:Date.now(),source:detectSource(r.title,file.name,list.slice(0,40).map(p=>p.text).join(' ')),units:r.units,unitName:r.unitName||null,count:list.length,size:file.size,
         docDate:r.docDate||null,fileDate:file.lastModified||null,fp:fnv(list.map(p=>p.text).join('\n')),sketch:sketchOf(list)};
       const m=findVersion(book);
       if(!m){ await commitBook(book,list); job.remove(); continue }
@@ -440,7 +492,10 @@ function renderShelf(){
   const ul=$('books'); ul.innerHTML='';
   const real=books.filter(b=>!b.sample).length;
   $('shelfCount').textContent=usingSamples?'samples':(real+' book'+(real===1?'':'s')+' · '+passages.length.toLocaleString()+' passages');
-  for(const b of books){
+  const ordered=[...books].sort((a,b)=>(SRC_RANK[a.source]??8)-(SRC_RANK[b.source]??8)||a.addedAt-b.addedAt);
+  let lastSrc=null;
+  for(const b of ordered){
+    if(b.source!==lastSrc){ lastSrc=b.source; const h=document.createElement('li'); h.className='shelf-group'; h.textContent=srcLabel(b.source); ul.appendChild(h) }
     const li=document.createElement('li'); li.className='book';
     const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=selected.has(b.id); cb.setAttribute('aria-label','Search in '+b.title);
     cb.onchange=()=>{cb.checked?selected.add(b.id):selected.delete(b.id); if($('q').value.trim()) doSearch()};
@@ -450,7 +505,10 @@ function renderShelf(){
     const m=document.createElement('div'); m.className='m';
     m.textContent=[b.kind.toUpperCase(), b.units?b.units+' '+b.unitName:null, b.count+' passages', (b.docDate||b.fileDate)&&!b.sample?fmtDate(b.docDate||b.fileDate):null].filter(Boolean).join(' · ');
     const ix=document.createElement('div'); ix.className='ix'; ix.dataset.ix=b.id; ix.textContent=ixText(b);
-    mid.append(t,m,ix);
+    const sel=document.createElement('select'); sel.className='srcsel'; sel.setAttribute('aria-label','Source of '+b.title);
+    for(const so of SOURCES){ const o=document.createElement('option'); o.value=so.id; o.textContent=so.label; if(so.id===(b.source||'other')) o.selected=true; sel.appendChild(o) }
+    sel.onchange=async()=>{ b.source=sel.value; if(!b.sample) await store.put(b).catch(()=>{}); renderShelf(); if($('q').value.trim()) doSearch() };
+    mid.append(t,m,sel,ix);
     const acts=document.createElement('div');
     if(!b.sample){
       t.title='Tap to rename'; t.style.cursor='text';
@@ -480,9 +538,11 @@ $('form').onsubmit=e=>{e.preventDefault(); $('q').blur(); doSearch()};
 $('allBooks').onclick=()=>{ books.forEach(b=>selected.add(b.id)); renderShelf(); if($('q').value.trim()) doSearch() };
 
 function order(){
-  const list=current.list;
-  if($('sort').value==='book'){ const pos=new Map(books.map((b,i)=>[b.id,i])); list.sort((a,b)=>(pos.get(passages[a.i].bookId)-pos.get(passages[b.i].bookId))||(a.i-b.i)) }
-  else list.sort((a,b)=>b.score-a.score);
+  const list=current.list, view=$('sort').value;
+  for(const x of list){ if(x.kind==null) x.kind=kindOf(passages[x.i].text); x.src=srcOf(passages[x.i].bookId); x.adj=x.score*KIND_BOOST[x.kind] }
+  if(view==='book'){ const pos=new Map(books.map((b,i)=>[b.id,i])); list.sort((a,b)=>(pos.get(passages[a.i].bookId)-pos.get(passages[b.i].bookId))||(a.i-b.i)) }
+  else if(view==='best') list.sort((a,b)=>b.adj-a.adj);
+  else list.sort((a,b)=>SRC_RANK[a.src]-SRC_RANK[b.src]||b.adj-a.adj);
 }
 
 async function doSearch(keepScroll){
@@ -518,25 +578,81 @@ function renderResults(reset){
   const {list,hl,q}=current;
   $('status').hidden=false;
   const nb=new Set(list.map(x=>passages[x.i].bookId)).size;
-  $('count').innerHTML=list.length?'<b>'+list.length.toLocaleString()+'</b> passage'+(list.length===1?'':'s')+' in <b>'+nb+'</b> book'+(nb===1?'':'s'):'No passages found';
+  $('count').innerHTML=list.length?'<b>'+list.length.toLocaleString()+'</b> passage'+(list.length===1?'':'s')+' in <b>'+nb+'</b> document'+(nb===1?'':'s'):'No passages found';
+  $('claudeBtn').hidden=!list.length; $('claudeNote').hidden=true;
+  $('srcnav').hidden=true;
   if(!list.length){
-    box.innerHTML='<div class="empty">Nothing matched <b>'+esc(q)+'</b>'+(selected.size<books.length?' in the books you ticked. Try <b>Search all books</b>.':'. Try fewer words or <b>Words + ideas</b>.')+'</div>';
+    box.innerHTML='<div class="empty">Nothing matched <b>'+esc(q)+'</b>'+(selected.size<books.length?' in the documents you ticked. Try <b>Search all books</b>.':'. Try fewer words or <b>Words + ideas</b>.')+'</div>';
     $('moreBtn').hidden=true; return;
   }
+  if($('sort').value==='source'){ $('moreBtn').hidden=true; renderGrouped(box); return }
   const end=Math.min(list.length,shown+PAGE);
   for(let k=shown;k<end;k++) box.appendChild(card(list[k],k+1,hl));
   shown=end;
   $('moreBtn').hidden=shown>=list.length;
   $('moreBtn').textContent='Show more passages ('+(list.length-shown).toLocaleString()+' left)';
 }
+const GROUP_SHOW=4;
+function renderGrouped(box){
+  const {list,hl}=current, g=new Map();
+  list.forEach((x,k)=>{ if(!g.has(x.src)) g.set(x.src,[]); g.get(x.src).push(k) });
+  const owned=new Map(); for(const b of books) if(selected.has(b.id)){ const s=b.source||'other'; owned.set(s,(owned.get(s)||0)+1) }
+  const nav=$('srcnav'); nav.innerHTML='';
+  for(const so of SOURCES){
+    const ks=g.get(so.id), have=owned.get(so.id);
+    if(!ks&&!have) continue;
+    const bt=document.createElement('button'); bt.type='button';
+    bt.onclick=()=>{ const el=$('g-'+so.id); if(el) el.scrollIntoView({behavior:'smooth',block:'start'}) };
+    if(ks) bt.innerHTML=esc(so.label)+'<b>'+ks.length+'</b>'; else { bt.className='none'; bt.textContent=so.label+' · none' }
+    nav.appendChild(bt);
+    const sec=document.createElement('section'); sec.className='group'+(ks?'':' miss'); sec.id='g-'+so.id;
+    const rk=so.id==='knowledge'?'BG':(SRC_RANK[so.id]+1);
+    if(!ks){ sec.innerHTML='<h3><span class="rk">'+rk+'</span>'+esc(so.label)+'</h3><p>Nothing found in your '+have+' document'+(have===1?'':'s')+' from this source.</p>'; box.appendChild(sec); continue }
+    const kc={}; for(const k of ks){ const kd=list[k].kind; if(kd!=='none') kc[kd]=(kc[kd]||0)+1 }
+    const kinds=KINDS.filter(x=>kc[x[0]]).map(x=>kc[x[0]]+' '+x[1].toLowerCase()+(kc[x[0]]>1?'s':'')).join(' · ');
+    sec.innerHTML='<h3><span class="rk">'+rk+'</span>'+esc(so.label)+'<span class="c">'+ks.length+' passage'+(ks.length===1?'':'s')+(kinds?' · '+esc(kinds):'')+'</span></h3>';
+    ks.slice(0,GROUP_SHOW).forEach(k=>sec.appendChild(card(list[k],k+1,hl)));
+    if(ks.length>GROUP_SHOW){
+      const more=document.createElement('button'); more.className='btn more'; more.type='button';
+      more.textContent='Show all '+ks.length+' passages from '+so.label;
+      more.onclick=()=>{ ks.slice(GROUP_SHOW).forEach(k=>more.before(card(list[k],k+1,hl))); more.remove() };
+      sec.appendChild(more);
+    }
+    box.appendChild(sec);
+  }
+  nav.hidden=!nav.children.length;
+}
+
+/* ---------- Hand the question and passages to Claude (copy, then paste into the Claude app) ---------- */
+function claudePrompt(){
+  const list=current.list;
+  const byIdx=[...list.keys()].sort((a,b)=>SRC_RANK[list[a].src]-SRC_RANK[list[b].src]||list[b].adj-list[a].adj);
+  const per={}, pick=[];
+  for(const k of byIdx){ const s=list[k].src; if((per[s]=(per[s]||0)+1)<=5&&pick.length<40) pick.push(k) }
+  const groups=SOURCES.map(so=>({so,ks:pick.filter(k=>list[k].src===so.id)})).filter(x=>x.ks.length);
+  const block=groups.map(({so,ks})=>'=== '+so.label+' ===\n'+ks.map(k=>{const p=passages[list[k].i], b=books.find(b=>b.id===p.bookId); return '['+(k+1)+'] ('+(b?b.title:'')+', '+p.loc+')\n'+p.text.slice(0,1100)}).join('\n\n')).join('\n\n');
+  const owned=new Set(books.filter(b=>selected.has(b.id)).map(b=>b.source||'other'));
+  const missing=SOURCES.filter(so=>owned.has(so.id)&&!groups.some(g=>g.so.id===so.id)).map(so=>so.label);
+  return 'I am an airline pilot (Boeing 737, Royal Air Maroc). Here are passages from my own document library about: "'+current.q+'".\n'+
+'They are grouped by source in my order of authority: Royal Air Maroc → Boeing 737 → DGAC Morocco → ICAO → EASA → FAA → UK CAA → other airlines → unsorted → background knowledge (textbooks).\n'+
+(missing.length?'Sources in my library with no matching passage: '+missing.join(', ')+'.\n':'')+
+'\nAnswer in the language of my topic, with one section per source in that order:\n- What the source says.\n- Any procedure or checklist: its steps in the original order and wording.\n- Limitations, figures and conditions exactly as written.\n- Definitions, briefly.\nCite passage numbers like [12]. Then "Differences between sources" and "Not found".\n'+
+'Use ONLY these passages. Do not add steps, numbers or procedures from general knowledge. If a checklist looks cut off, say so and give the reference.\n\n'+block;
+}
+$('claudeBtn').onclick=async()=>{
+  const txt=claudePrompt(), note=$('claudeNote');
+  try{ await navigator.clipboard.writeText(txt); note.textContent='Copied: your question and the top passages from each source. Open the Claude app, paste, and send. (Needs internet.)' }
+  catch(e){ note.textContent='Select all the text below, copy it, then paste it into the Claude app.'; const ta=document.createElement('textarea'); ta.value=txt; ta.rows=8; ta.style.cssText='width:100%;margin-top:8px;font-size:12px'; note.appendChild(ta); ta.focus(); ta.select() }
+  note.hidden=false;
+};
 $('moreBtn').onclick=()=>renderResults(false);
 
 function card(x,n,hl){
   const p=passages[x.i], b=books.find(b=>b.id===p.bookId)||{title:'?'};
-  const el=document.createElement('article'); el.className='pass';
+  const el=document.createElement('article'); el.className='pass'; el.id='r'+n;
   const units=byBook.get(p.bookId)||[]; const pos=units.indexOf(x.i);
   const partNote=p.loc.startsWith('Ch.')&&p.part>1?' · part '+p.part:'';
-  const tags=(x.word?'<span class="tag w">Word match</span>':'')+(x.idea?'<span class="tag i">Idea match</span>':'');
+  const tags=($('sort').value!=='source'?'<span class="kind">'+esc(srcLabel(srcOf(p.bookId)))+'</span>':'')+(x.kind&&x.kind!=='none'?'<span class="kind '+x.kind+'">'+kindLabel(x.kind)+'</span>':'')+(x.word?'<span class="tag w">Word match</span>':'')+(x.idea?'<span class="tag i">Idea match</span>':'');
   el.innerHTML='<header><div class="ref"><span class="n">'+n+'</span><span class="bt" dir="auto">'+esc(b.title)+'</span><span>'+esc(p.loc+partNote)+'</span></div><div class="tags">'+tags+'</div></header>'+
     '<div class="text" dir="'+(isRtl(p.text)?'rtl':'ltr')+'">'+highlight(p.text,hl)+'</div>'+
     '<footer><button class="btn ghost small" data-a="ctx" type="button">Show surrounding text</button><button class="btn ghost small" data-a="copy" type="button">Copy with reference</button></footer>';
@@ -575,7 +691,7 @@ $('importIn').onchange=async e=>{
     const d=JSON.parse(await f.text()); if(d.app!=='maktaba') throw 0;
     if(usingSamples) clearSamples();
     let added=0;
-    for(const b0 of d.books){ if(books.some(x=>x.id===b0.id)) continue; const b={...b0,indexed:false}; const rec=d.passages.find(p=>p.bookId===b.id); const list=rec&&rec.list||[];
+    for(const b0 of d.books){ if(books.some(x=>x.id===b0.id)) continue; const b={...b0,indexed:false}; const rec=d.passages.find(p=>p.bookId===b.id); const list=rec&&rec.list||[]; if(!b.source) b.source=detectSource(b.title,b.file,list.slice(0,40).map(p=>p.text).join(' '));
       await store.put(b,list).catch(()=>{}); books.push(b); list.forEach(p=>passages.push({bookId:b.id,...p})); selected.add(b.id); added++ }
     rebuildIndex(); renderShelf(); if($('q').value.trim()) doSearch(); indexLoop();
     $('storeNote').className='note'; $('storeNote').textContent='Restored '+added+' book'+(added===1?'':'s')+' from the backup.';
@@ -591,25 +707,22 @@ document.addEventListener('drop',e=>{ if(e.dataTransfer&&e.dataTransfer.files.le
 
 /* ---------- Sample books (shown only while the shelf is empty) ---------- */
 const SAMPLES=[
- {id:'sample-en',title:'The Quiet Workshop',kind:'pdf',units:4,unitName:'pages',pages:[
-  'Every craft begins with waiting. The carpenter waits for the wood to dry, the potter waits for the kiln to cool, and the apprentice waits years before the master trusts him with the finest work. Patience here is not passive. It is the discipline of doing the small task well while the large result is still far away.',
-  'When a colleague criticises your work in front of others, the first impulse is to answer at once. Wait. Take one breath, then ask a question instead of defending yourself: what exactly would you change? Most anger fades when it is met with curiosity, and the person who stays calm usually keeps the respect of the room.',
-  'A difficult person is often a frightened person. The manager who shouts about deadlines may be afraid of his own superiors. Seeing the fear behind the behaviour does not excuse it, but it lets you respond to the real problem rather than to the noise.',
-  'Keep a written record of agreements. Memory is generous to whoever is speaking, and a short email after each meeting, listing who will do what and by when, prevents many arguments before they start.']},
- {id:'sample-fr',title:'Carnet sur la colère',kind:'epub',units:3,unitName:'chapters',chapters:[
-  'La colère arrive vite et repart lentement. Celui qui répond sous le coup de l’émotion regrette souvent ses paroles le lendemain. Avant d’écrire un message à un collègue qui vous a blessé, attendez une nuit : la réponse sera plus courte et plus juste.',
-  'La patience n’est pas de la faiblesse. Supporter un moment difficile sans réagir demande plus de force que de crier. Les anciens disaient que le temps est le meilleur conseiller.',
-  'Pour parler à une personne difficile, décrivez les faits sans juger : « Le rapport est arrivé avec trois jours de retard » plutôt que « Tu n’es jamais fiable ». Les faits ouvrent une discussion ; les jugements ferment la porte.']},
- {id:'sample-ar',title:'رسالة في الصبر',kind:'pdf',units:3,unitName:'pages',pages:[
-  'الصبر مفتاح الفرج، وليس معناه أن يسكت الإنسان عن حقه، بل أن يملك نفسه عند الغضب حتى يختار الكلمة المناسبة في الوقت المناسب.',
-  'إذا أساء إليك زميل في العمل فلا تتعجل في الرد. اسأله عن قصده أولاً، فكثير من الخلافات تبدأ بسوء فهم وتنتهي بكلمة طيبة.',
-  'من عرف أن الشدة لا تدوم هان عليه احتمالها، فالأيام دول، والعاقل من يعمل في صمت وينتظر ثمرة جهده دون ضجر.']},
+ {id:'sample-ops',title:'Sample company operations manual (invented)',source:'ram',kind:'pdf',units:2,unitName:'pages',pages:[
+  'VOLCANIC ASH – COMPANY POLICY (invented sample text, not a real manual). Flight crews shall avoid all areas of known or forecast volcanic ash. Before each flight the crew and dispatch shall review volcanic ash advisories and SIGMETs for the route, the destination and the alternates.',
+  'If a volcanic ash encounter is suspected, the crew shall apply the aircraft manufacturer’s non-normal checklist, inform ATC, and report the encounter to the operations control centre as soon as practicable. A post-flight report is required after any suspected encounter.']},
+ {id:'sample-qrh',title:'Sample aircraft QRH extract (invented)',source:'boeing',kind:'pdf',units:1,unitName:'pages',pages:[
+  'Volcanic Ash (invented sample, not a real checklist; always use your aircraft’s approved QRH). Condition: Volcanic ash is suspected or encountered. Indications can include an acrid odour, dust in the flight deck, St. Elmo’s fire and engine malfunctions. Objective: To leave the ash and protect the engines. Step 1 Leave the ash by the quickest route. Step 2 Follow the remaining steps of the approved checklist.']},
+ {id:'sample-icao',title:'Sample international guidance (invented)',source:'icao',kind:'pdf',units:2,unitName:'pages',pages:[
+  'Volcanic ash advisory centres monitor eruptions and issue advisories that help meteorological offices prepare SIGMET messages for volcanic ash. Operators should include volcanic ash in their safety risk assessment (invented sample text).',
+  'Cendres volcaniques : les exploitants doivent tenir compte des avis de cendres volcaniques et des SIGMET dans la planification des vols (texte d’exemple inventé).']},
+ {id:'sample-met',title:'Sample meteorology course notes (invented)',source:'knowledge',kind:'epub',units:1,unitName:'chapters',chapters:[
+  'Volcanic ash is made of fine particles of rock and glass. It is a hazard to aircraft because the glass can melt in the hot section of a jet engine, it abrades windscreens and leading edges, and it can block pitot-static sensors. Ash clouds are hard to see at night and do not show on weather radar (invented sample text for trying the search).']},
 ];
 function loadSamples(){
   usingSamples=true; books=[]; passages=[];
   for(const s of SAMPLES){
     const list=s.pages?s.pages.map((t,i)=>({loc:'p. '+(i+1),part:1,text:t})):s.chapters.map((t,i)=>({loc:'Ch. '+(i+1),part:1,text:t}));
-    books.push({id:s.id,title:s.title,kind:s.kind,units:s.units,unitName:s.unitName,count:list.length,sample:true,addedAt:0});
+    books.push({id:s.id,title:s.title,source:s.source,kind:s.kind,units:s.units,unitName:s.unitName,count:list.length,sample:true,addedAt:0});
     list.forEach(p=>passages.push({bookId:s.id,...p})); selected.add(s.id);
   }
   rebuildIndex(); $('sampleBanner').hidden=false;
@@ -629,7 +742,9 @@ window.addEventListener('online',updateNet); window.addEventListener('offline',u
 
 /* ---------- Start ---------- */
 (async function start(){
-  if('serviceWorker' in navigator){ try{ await navigator.serviceWorker.register('sw.js'); navigator.serviceWorker.addEventListener('controllerchange',updateNet) }catch(e){} }
+  if('serviceWorker' in navigator){ try{ const had=!!navigator.serviceWorker.controller; let reloaded=false;
+    navigator.serviceWorker.addEventListener('controllerchange',()=>{ if(had&&!reloaded){ reloaded=true; location.reload() } else updateNet() });
+    const reg=await navigator.serviceWorker.register('sw.js'); if(navigator.onLine) reg.update().catch(()=>{}) }catch(e){} }
   const standalone=window.matchMedia('(display-mode: standalone)').matches||navigator.standalone;
   const ios=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
   if(ios&&!standalone) $('installTip').hidden=false;
@@ -639,9 +754,11 @@ window.addEventListener('online',updateNet); window.addEventListener('offline',u
     const bs=await store.all('books'), ps=await store.all('passages');
     const map=new Map(ps.map(p=>[p.bookId,p.list]));
     bs.sort((a,b)=>a.addedAt-b.addedAt);
-    for(const b of bs){ books.push(b); (map.get(b.id)||[]).forEach(p=>passages.push({bookId:b.id,...p})); selected.add(b.id) }
+    for(const b of bs){ const list=map.get(b.id)||[];
+      if(!b.source){ b.source=detectSource(b.title,b.file,list.slice(0,40).map(p=>p.text).join(' ')); store.put(b).catch(()=>{}) }
+      books.push(b); list.forEach(p=>passages.push({bookId:b.id,...p})); selected.add(b.id) }
   }catch(e){}
-  if(!books.length){ loadSamples(); $('q').value='patience' } else rebuildIndex();
+  if(!books.length){ loadSamples(); $('q').value='volcanic ash' } else rebuildIndex();
   for(const b of books){ if(b.sample) continue;
     try{ const segs=await store.vecsOf(b.id); let st={data:new Int8Array(0),scale:new Float32Array(0),owner:new Int32Array(0)};
       for(const s of segs) st=concatVec(st,s); if(b.indexed) st.complete=true; if(st.owner.length) vecs.set(b.id,st) }catch(e){} }
