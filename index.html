@@ -73,6 +73,26 @@ button{cursor:pointer}
 .book .rename{width:100%;font-family:var(--f-read);font-size:14px;padding:2px 4px;border:1px solid var(--accent);border-radius:4px;background:var(--surface)}
 .sample-tag{font-family:var(--f-ui);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);background:var(--warn-soft);border-radius:4px;padding:1px 5px;margin-inline-start:4px;vertical-align:2px}
 .shelf-foot{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+/* Briefing card */
+.brief{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:16px 18px 6px}
+.brief h2{margin:0;font-family:var(--f-read);font-size:21px;font-weight:600;overflow-wrap:anywhere}
+.brief .sub{margin:2px 0 8px;font-size:12.5px;color:var(--muted)}
+.brief .row{display:grid;grid-template-columns:170px minmax(0,1fr);gap:4px 16px;padding:11px 0;border-top:1px solid var(--line)}
+@media (max-width:640px){.brief .row{grid-template-columns:minmax(0,1fr)}}
+.brief .who{font-weight:600;font-size:14px}
+.brief .yes{display:block;font-size:12.5px;font-weight:600;color:var(--accent)}
+.brief .yes.chk{color:var(--warn)}
+.brief .no{display:block;font-size:12.5px;color:var(--muted);font-weight:400}
+.brief .say{font-family:var(--f-read);font-size:16px;line-height:1.55;overflow-wrap:anywhere;unicode-bidi:plaintext}
+.brief .say.none{color:var(--muted);font-family:var(--f-ui);font-size:14px}
+.brief .refbtn{display:inline;border:0;background:none;color:var(--accent);font-family:var(--f-mono);font-size:12px;padding:0;margin-top:4px;text-decoration:underline;text-underline-offset:2px;text-align:start;overflow-wrap:anywhere}
+.brief .also{font-size:12.5px;color:var(--muted);margin-top:4px}
+.ixall{display:flex;flex-direction:column;gap:4px;font-size:12.5px;color:var(--idea)}
+.ixall .bar i{background:var(--idea)}
+.sortbar{display:flex;flex-wrap:wrap;gap:6px;align-items:center;background:var(--idea-soft);border-radius:10px;padding:8px 10px;font-size:13px}
+.book.pickable{cursor:pointer;border-radius:8px}
+.book.picked{background:var(--idea-soft)}
+.shelf-group .selall{margin-inline-start:8px;font-size:11px;text-transform:none;letter-spacing:0;border:0;background:none;color:var(--idea);text-decoration:underline;padding:0}
 .note{font-size:12.5px;color:var(--muted);margin:0}
 .note.warn{color:var(--warn)}
 .desk{display:flex;flex-direction:column;gap:14px;min-width:0}
@@ -148,9 +168,12 @@ mark{background:var(--mark);color:var(--mark-ink);border-radius:2px;padding:0 1p
     </label>
     <div class="jobs" id="jobs"></div>
     <div class="banner" id="backupNag" hidden></div>
+    <div class="ixall" id="ixAll" hidden></div>
+    <div class="sortbar" id="sortBar" hidden></div>
     <ul class="books" id="books"></ul>
     <div class="shelf-foot">
       <button class="btn small" id="allBooks" type="button">Search all books</button>
+      <button class="btn small" id="sortBtn" type="button">Sort documents</button>
       <button class="btn small" id="exportBtn" type="button">Save a backup</button>
       <label class="btn small" for="importIn">Restore backup</label>
       <input type="file" id="importIn" accept=".json,application/json" hidden>
@@ -171,18 +194,21 @@ mark{background:var(--mark);color:var(--mark-ink);border-radius:2px;padding:0 1p
       <label class="chk"><input type="checkbox" id="allWords"> Every word must appear</label>
       <label class="chk">Show <select id="sort"><option value="source">By source priority</option><option value="best">Best match overall</option><option value="book">Book order</option></select></label>
     </div>
-    <div class="tips">Use <code>"volcanic ash"</code> for an exact phrase and <code>-training</code> to leave a word out. Results are grouped by source in your order of authority, with checklists and procedures first. Change a document’s source with the menu under its title.</div>
+    <div class="tips">Ask about a topic, for example <code>volcanic ash</code> or <code>engine fire on ground</code>. You get a short briefing in your order: company first, then Boeing, then the regulators. Tap a reference to read the passage.</div>
     <div class="model" id="modelCard" hidden>
       <p id="modelText">Idea search runs on this device with a small AI model. Download it once (about 120 MB, best on Wi-Fi). After that it works with no internet.</p>
       <button class="btn primary" id="modelBtn" type="button">Download idea model</button>
       <div class="bar" id="modelBar" hidden><i></i></div>
     </div>
     <div class="banner" id="sampleBanner" hidden>You are looking at four short <b>invented</b> sample documents so you can try the search. They are not real manuals. Add your own documents and the samples disappear.</div>
-    <div class="status" id="status" hidden><div id="count"></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="note" id="work"></span><button class="btn small" id="claudeBtn" type="button" hidden>Copy for Claude</button></div></div>
+    <section class="brief" id="brief" hidden></section>
+    <div class="status" id="status" hidden><div id="count"></div><div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap"><span class="note" id="work"></span><button class="btn small" id="claudeBtn" type="button" hidden>Copy for Claude</button><button class="btn small" id="listBtn" type="button">Show all passages</button></div></div>
     <p class="note" id="claudeNote" hidden></p>
+    <div id="listWrap" hidden>
     <nav class="srcnav" id="srcnav" aria-label="Jump to a source" hidden></nav>
     <div class="results" id="results"></div>
     <button class="btn more" id="moreBtn" type="button" hidden>Show more passages</button>
+    </div>
   </main>
 </div>
 <script src="app.js"></script>

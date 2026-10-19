@@ -234,14 +234,14 @@ function windowsOf(text){
 }
 const isIndexed=b=>b.sample?!!(vecs.get(b.id)&&vecs.get(b.id).complete):!!b.indexed;
 async function indexLoop(){
-  if(indexing||modelState!=='ready') return; indexing=true;
+  if(indexing||modelState!=='ready') return; indexing=true; keepAwake(true); ixT0=performance.now(); ixWins=0;
   try{
     for(;;){
       const b=books.find(b=>!isIndexed(b)&&!b.indexFailed); if(!b) break;
       try{ await indexBook(b) }catch(e){ b.indexFailed=true; console.error(e) }
       renderShelf();
     }
-  }finally{ indexing=false; renderShelf() }
+  }finally{ indexing=false; keepAwake(false); renderShelf(); renderIxAll() }
 }
 async function indexBook(b){
   const locals=byBook.get(b.id)||[]; const wins=[];
@@ -459,7 +459,7 @@ async function addFiles(files){
       else throw new Error('This file type isn’t supported. Use PDF, EPUB, DOCX, TXT or Markdown.');
       const list=cut(r.segs);
       if(list.reduce((a,p)=>a+p.text.length,0)<200) throw new Error(ext==='pdf'?'No text found in this PDF. It is probably scanned pages (pictures of text). Run it through a text-recognition (OCR) tool first, then add it again.':'No readable text found in this file.');
-      const book={id:uid(),title:r.title||cleanTitle(file.name),file:file.name,kind:ext,addedAt:Date.now(),source:detectSource(r.title,file.name,list.slice(0,40).map(p=>p.text).join(' ')),units:r.units,unitName:r.unitName||null,count:list.length,size:file.size,
+      const book={id:uid(),title:niceTitle(r.title,file.name),file:file.name,kind:ext,addedAt:Date.now(),source:detectSource(r.title,file.name,list.slice(0,40).map(p=>p.text).join(' ')),units:r.units,unitName:r.unitName||null,count:list.length,size:file.size,
         docDate:r.docDate||null,fileDate:file.lastModified||null,fp:fnv(list.map(p=>p.text).join('\n')),sketch:sketchOf(list)};
       const m=findVersion(book);
       if(!m){ await commitBook(book,list); job.remove(); continue }
@@ -488,16 +488,21 @@ function ixText(b){
   if(b.indexFailed) return 'Idea search couldn’t index this book';
   const p=indexProgress.get(b.id); return p!=null?'Preparing idea search… '+Math.round(p*100)+'%':'Waiting for idea search…';
 }
-function renderIndexBadge(b){ const el=document.querySelector('[data-ix="'+b.id+'"]'); if(el) el.textContent=ixText(b) }
+let ixLastDraw=0;
+function renderIndexBadge(b){ const el=document.querySelector('[data-ix="'+b.id+'"]'); if(el) el.textContent=ixText(b); ixWins+=16; const dt=(performance.now()-ixT0)/1000; if(dt>20) ixRate=ixWins/dt; if(performance.now()-ixLastDraw>3000){ ixLastDraw=performance.now(); renderIxAll() } }
 function renderShelf(){
+  renderSortBar(); renderIxAll();
   const ul=$('books'); ul.innerHTML='';
   const real=books.filter(b=>!b.sample).length;
   $('shelfCount').textContent=usingSamples?'samples':(real+' book'+(real===1?'':'s')+' · '+passages.length.toLocaleString()+' passages');
   const ordered=[...books].sort((a,b)=>(SRC_RANK[a.source]??8)-(SRC_RANK[b.source]??8)||a.addedAt-b.addedAt);
   let lastSrc=null;
   for(const b of ordered){
-    if(b.source!==lastSrc){ lastSrc=b.source; const h=document.createElement('li'); h.className='shelf-group'; h.textContent=srcLabel(b.source); ul.appendChild(h) }
-    const li=document.createElement('li'); li.className='book';
+    if(b.source!==lastSrc){ lastSrc=b.source; const h=document.createElement('li'); h.className='shelf-group'; h.textContent=srcLabel(b.source);
+      if(sortMode){ const src=b.source; const sa=document.createElement('button'); sa.type='button'; sa.className='selall'; sa.textContent='select all'; sa.onclick=()=>{ books.filter(x=>x.source===src&&!x.sample).forEach(x=>picked.add(x.id)); renderShelf() }; h.appendChild(sa) }
+      ul.appendChild(h) }
+    const li=document.createElement('li'); li.className='book'+(sortMode&&!b.sample?' pickable':'')+(picked.has(b.id)?' picked':'');
+    if(sortMode&&!b.sample) li.onclick=e=>{ if(e.target.closest('select,button,input')) return; picked.has(b.id)?picked.delete(b.id):picked.add(b.id); renderShelf() };
     const cb=document.createElement('input'); cb.type='checkbox'; cb.checked=selected.has(b.id); cb.setAttribute('aria-label','Search in '+b.title);
     cb.onchange=()=>{cb.checked?selected.add(b.id):selected.delete(b.id); if($('q').value.trim()) doSearch()};
     const mid=document.createElement('div');
@@ -549,12 +554,12 @@ function order(){
 async function doSearch(keepScroll){
   const q=$('q').value.trim(); const my=++run;
   $('work').textContent='';
-  if(!q){ $('status').hidden=true; $('results').innerHTML=''; $('moreBtn').hidden=true; return }
+  if(!q){ $('status').hidden=true; $('brief').hidden=true; $('results').innerHTML=''; $('moreBtn').hidden=true; return }
   const all=$('allWords').checked;
   const {res,hl,exclIds,fl}=wordSearch(q,all);
   let kwMax=1e-9; for(const v of res.values()) if(v>kwMax) kwMax=v;
   let list=[...res].map(([i,s])=>({i,score:s/kwMax,word:true}));
-  current={q,list,hl}; order(); renderResults(!keepScroll);
+  current={q,list,hl}; order(); renderResults(!keepScroll); if(!keepScroll) setList(false); renderBrief(my);
   if(mode!=='ideas') return;
   if(modelState!=='ready'){ $('work').textContent=modelState==='loading'?'Idea search is getting ready. Showing word matches for now.':'Showing word matches. Download the idea model for idea search.'; return }
   const plain=parseQuery(q).plain.trim(); if(!plain) return;
@@ -569,7 +574,7 @@ async function doSearch(keepScroll){
   for(const x of list){ const s=sims.get(x.i); if(s!=null){ x.sim=s; x.idea=s>=thr; x.score=.45*x.score+.55*rel(s) } else x.score*=.45 }
   const extra=[...sims].filter(([i,s])=>s>=thr&&!byI.has(i)&&!exclIds.has(i)&&!all&&!(fl.length&&!fl.every(p=>flats[i].includes(p)))).sort((a,b)=>b[1]-a[1]).slice(0,150);
   for(const [i,s] of extra) list.push({i,sim:s,idea:true,word:false,score:.55*rel(s)});
-  current={q,list,hl}; order(); renderResults(true);
+  current={q,list,hl}; order(); renderResults(true); renderBrief(my);
   if(notReady) $('work').textContent=notReady+' book'+(notReady===1?' is':'s are')+' still being prepared for idea search.';
 }
 
@@ -584,7 +589,7 @@ function renderResults(reset){
   $('srcnav').hidden=true;
   if(!list.length){
     box.innerHTML='<div class="empty">Nothing matched <b>'+esc(q)+'</b>'+(selected.size<books.length?' in the documents you ticked. Try <b>Search all books</b>.':'. Try fewer words or <b>Words + ideas</b>.')+'</div>';
-    $('moreBtn').hidden=true; return;
+    $('moreBtn').hidden=true; $('brief').hidden=true; setList(true); return;
   }
   if($('sort').value==='source'){ $('moreBtn').hidden=true; renderGrouped(box); return }
   const end=Math.min(list.length,shown+PAGE);
@@ -637,16 +642,14 @@ function claudePrompt(){
   return 'You are an experienced airline training captain. I am a Boeing 737 pilot at Royal Air Maroc. Using ONLY the passages below from my own document library, give me a briefing on: "'+current.q+'".\n'+
 'Sources, in my order of authority: '+SOURCES.filter(s=>s.id!=='other').map(s=>s.label).join(' → ')+'.\n'+
 (missing.length?'Sources in my library with nothing on this: '+missing.join(', ')+'.\n':'')+
-'\nAnswer in the language of my question, with these sections (skip one only if there is nothing for it):\n'+
-'## The big picture: 5 to 8 points a pilot must know, most safety-critical first.\n'+
-'## Royal Air Maroc: company policy, procedures, checklists, reporting.\n'+
-'## Boeing 737: checklists by name, memory items and steps in exact order and wording, and Boeing’s reasons.\n'+
-'## Regulators: Moroccan CAA (DGAC), then ICAO, then EASA, then FAA and UK CAA.\n'+
-'## How other airlines do it: how their checklists or procedures differ, and why it matters.\n'+
-'## Background: why it happens (textbooks).\n'+
-'## Watch out for: conflicts, stricter rules, traps.\n'+
-'## Not in my library.\n'+
-'Rules: use ONLY these passages, never add steps, numbers or procedures from general knowledge; cite passage numbers like [12]; copy checklist steps and figures exactly; if a checklist looks cut off, say so. Be concise: the best information, not everything.\n\n'+block;
+'\nThink like a senior 737 captain. Give me a SHORT briefing (about 200 words) in the language of my question, in this order:\n'+
+'Company guidance: is there specific RAM guidance? Yes or no, then the essential requirement in one or two lines.\n'+
+'Boeing: is there a QRH checklist or FCOM/FCTM procedure? Name it; only memory items or key first actions.\n'+
+'Regulators: one line each for Moroccan CAA (DGAC), ICAO, EASA, then FAA and UK CAA, only if they add something.\n'+
+'Other airlines: one line, only if their approach differs in a way that matters.\n'+
+'Key points: 3 to 5 bullets a pilot must remember, most safety-critical first.\n'+
+'Not found: sources with nothing on this.\n'+
+'Rules: process, do not quote long text; use ONLY these passages, never add steps, numbers or procedures from general knowledge; cite passage numbers like [12]; copy any checklist action or figure exactly.\n\n'+block;
 }
 $('claudeBtn').onclick=async()=>{
   const txt=claudePrompt(), note=$('claudeNote');
@@ -661,9 +664,9 @@ function card(x,n,hl){
   const el=document.createElement('article'); el.className='pass'; el.id='r'+n;
   const units=byBook.get(p.bookId)||[]; const pos=units.indexOf(x.i);
   const partNote=p.loc.startsWith('Ch.')&&p.part>1?' · part '+p.part:'';
-  const tags=($('sort').value!=='source'?'<span class="kind">'+esc(srcLabel(srcOf(p.bookId)))+'</span>':'')+(x.kind&&x.kind!=='none'?'<span class="kind '+x.kind+'">'+kindLabel(x.kind)+'</span>':'')+(x.word?'<span class="tag w">Word match</span>':'')+(x.idea?'<span class="tag i">Idea match</span>':'');
+  const tags=($('sort').value!=='source'?'<span class="kind">'+esc(srcLabel(srcOf(p.bookId)))+'</span>':'')+(x.kind&&x.kind!=='none'?'<span class="kind '+x.kind+'">'+kindLabel(x.kind)+'</span>':'');
   el.innerHTML='<header><div class="ref"><span class="n">'+n+'</span><span class="bt" dir="auto">'+esc(b.title)+'</span><span>'+esc(p.loc+partNote)+'</span></div><div class="tags">'+tags+'</div></header>'+
-    '<div class="text" dir="'+(isRtl(p.text)?'rtl':'ltr')+'">'+highlight(p.text,hl)+'</div>'+
+    '<div class="text" dir="'+(isRtl(p.text)?'rtl':'ltr')+'">'+esc(p.text)+'</div>'+
     '<footer><button class="btn ghost small" data-a="ctx" type="button">Show surrounding text</button><button class="btn ghost small" data-a="copy" type="button">Copy with reference</button></footer>';
   el.querySelector('[data-a=ctx]').onclick=e=>{
     const btn=e.currentTarget, open=el.querySelector('.ctx');
@@ -707,6 +710,166 @@ $('importIn').onchange=async e=>{
   }catch(err){ $('storeNote').textContent='That file isn’t a Maktaba backup.'; $('storeNote').className='note warn' }
 };
 
+
+
+/* ---------- Briefing card: the pilot's short answer, in priority order ---------- */
+const BRIEF_ROWS=[['ram','Company (RAM)'],['boeing','Boeing 737'],['dgac','Moroccan CAA'],['icao','ICAO'],['easa','EASA'],['faa','FAA'],['uk','UK CAA'],['airline','Other airlines'],['knowledge','Background']];
+let listOpen=false;
+function setList(open){ listOpen=open; $('listWrap').hidden=!open; $('listBtn').textContent=open?'Hide passages':'Show all passages' }
+$('listBtn').onclick=()=>setList(!listOpen);
+const bookOf=x=>books.find(b=>b.id===passages[x.i].bookId)||{title:'?'};
+function cleanPassage(t){ return t.replace(/[-_=.·•]{4,}/g,' ').replace(/COPYRIGHT\s[^.]{0,90}?(not controlled if printed\.?|printed\.?)/gi,' ').replace(/\b(EDITION|REVISION|REV)\s*\d+\s*(REVISION\s*\d+\s*)?DATE\s*[\d/.-]+\s*PAGE\s*[\w.-]+/gi,' ').replace(/\s{2,}/g,' ').trim() }
+function sentencesOf(text){
+  const raw=cleanPassage(text).split(/(?<=[.!?؟])\s+(?=[A-Z0-9«"“(\u0600-\u06FF])|\s+(?=\d+\s+[A-Z][a-z])/u), parts=[];
+  for(const seg of raw){ if(parts.length&&/\b(St|Mr|Dr|No|Nos|Fig|Vol|Ch|Rev|para|approx|e\.g|i\.e|cf|etc|Ref|Sect?|Art)\.$/i.test(parts[parts.length-1])) parts[parts.length-1]+=' '+seg; else parts.push(seg) }
+  return parts.map(s=>s.trim()).filter(s=>s.length>=25&&s.length<=420&&!/^[A-Z0-9 ().,:/-]{25,}$/.test(s));
+}
+const CUE=/\b(shall|must|do not|don't|avoid|never|should|required|immediately|land at|turn|exit|leave|checklist|procedure|memory item|report|doit|ne pas|éviter|interdit)\b/i;
+function capsRatio(t){ const l=t.match(/\p{L}/gu)||[]; if(l.length<10) return 0; return l.filter(c=>c!==c.toLowerCase()).length/l.length }
+function lexScore(sent,qs){ if(!qs.length) return 0; const st=new Set(terms(sent)); let h=0; for(const s of qs) if(st.has(s)) h++; return h/qs.length+(CUE.test(sent)?.3:0)-(sent.length>300?.1:0)-(capsRatio(sent)>.6?.9:0)-(sent.length<45?.3:0) }
+function checklistName(text){
+  const m=cleanPassage(text).match(/([A-Z][A-Za-z0-9 ,/'()-]{3,48}?)\s+Condition\s*:/); return m?m[1].trim():null;
+}
+function briefPick(qs){
+  const {list}=current;
+  const owned=new Set(books.filter(b=>selected.has(b.id)).map(b=>b.source||'other'));
+  const rows=[];
+  for(const [sid,label] of BRIEF_ROWS){
+    if(!owned.has(sid)) continue;
+    const cands=[];
+    for(const x of list){ if(x.src!==sid) continue;
+      const st=new Set(terms(passages[x.i].text)); const cov=qs.length?qs.filter(s=>st.has(s)).length/qs.length:0;
+      if(cov>=.99||x.idea||(qs.length>2&&cov>=.66)) cands.push({x,cov}) }
+    if(!cands.length){ rows.push({sid,label,none:true}); continue }
+    const val=o=>o.x.score*KIND_BOOST[o.x.kind]*(.5+o.cov);
+    cands.sort((a,b)=>val(b)-val(a));
+    let best=cands[0].x;
+    if(sid==='boeing'){ const q2=cands.slice(0,12).find(o=>o.x.kind==='checklist'||/\bQRH\b/i.test(bookOf(o.x).title)); if(q2) best=q2.x }
+    const docs=new Set(cands.map(o=>passages[o.x.i].bookId)).size;
+    rows.push({sid,label,x:best,docs,count:cands.length,hasChk:cands.some(o=>o.x.kind==='checklist'),hasProc:cands.some(o=>o.x.kind==='procedure')});
+  }
+  return rows;
+}
+function bestSentence(x,qs,sims){
+  const ss=sentencesOf(passages[x.i].text); if(!ss.length) return [cleanPassage(passages[x.i].text).slice(0,240)];
+  const val=ss.map((s,j)=>lexScore(s,qs)*(sims?.5:1)+(sims&&sims[j]!=null?sims[j]*.9:0));
+  let bi=0; val.forEach((v,j)=>{ if(v>val[bi]) bi=j });
+  const cut=t=>t.length>240?t.slice(0,237)+'…':t;
+  const out=[cut(ss[bi])];
+  if(!CUE.test(ss[bi])){ let ai=-1; ss.forEach((s,j)=>{ if(j!==bi&&CUE.test(s)&&capsRatio(s)<=.6&&(ai<0||val[j]>val[ai])) ai=j }); if(ai>=0) out.push(cut(ss[ai])) }
+  return out;
+}
+function verdict(r){
+  if(r.none) return '';
+  const chk=r.hasChk, proc=r.hasProc;
+  if(r.sid==='ram') return chk?'Company checklist exists':proc?'Company procedure exists':'Company guidance exists';
+  if(r.sid==='boeing'){ const n=checklistName(passages[r.x.i].text); return n?'QRH checklist: '+n:(chk?'Boeing checklist exists':proc?'Boeing procedure (FCOM/FCTM)':'Boeing guidance exists') }
+  if(r.sid==='airline') return r.docs+' other airline document'+(r.docs===1?'':'s')+' cover it';
+  if(r.sid==='knowledge') return 'Why it matters';
+  return chk||proc?'Procedure or requirement':'Guidance exists';
+}
+function noneText(sid){
+  return {ram:'No specific company guidance found in your RAM documents.',boeing:'No Boeing procedure found in your Boeing documents.'}[sid]||'Nothing specific found.';
+}
+async function renderBrief(my){
+  const box=$('brief'); if(!current||!current.list.length){ box.hidden=true; return }
+  const qs=[...new Set(terms(parseQuery(current.q).plain))];
+  const rows=briefPick(qs);
+  const draw=sims=>{
+    if(my!==run) return;
+    box.innerHTML='<h2 dir="auto">'+esc(current.q)+'</h2><p class="sub">Briefing from your documents, in your order of authority. Tap a reference to read it. For a full analysis, use Copy for Claude.</p>';
+    rows.forEach((r,ri)=>{
+      const row=document.createElement('div'); row.className='row';
+      const who=document.createElement('div'); who.className='who'; who.textContent=r.label;
+      const v=verdict(r); const tag=document.createElement('span');
+      if(r.none){ tag.className='no'; tag.textContent='Not found' } else { tag.className='yes'+(r.hasChk&&(r.sid==='ram'||r.sid==='boeing')?' chk':''); tag.textContent=v }
+      who.appendChild(tag);
+      const say=document.createElement('div');
+      if(r.none){ say.className='say none'; say.textContent=noneText(r.sid) }
+      else{
+        say.className='say'; bestSentence(r.x,qs,sims&&sims[ri]).forEach((t,j)=>{ const q=document.createElement('div'); q.dir='auto'; q.textContent=(j?'→ ':'')+'“'+t+'”'; say.appendChild(q) });
+        const p=passages[r.x.i], k=current.list.indexOf(r.x);
+        const ref=document.createElement('button'); ref.type='button'; ref.className='refbtn'; ref.textContent=bookOf(r.x).title+' · '+p.loc;
+        ref.onclick=()=>jumpTo(k); say.appendChild(ref);
+        if(r.count>1){ const a=document.createElement('div'); a.className='also'; a.textContent='Also in '+(r.count-1)+' more passage'+(r.count===2?'':'s')+(r.docs>1?' across '+r.docs+' documents':''); say.appendChild(a) }
+      }
+      row.append(who,say); box.appendChild(row);
+    });
+    box.hidden=false;
+  };
+  draw(null);
+  // Refine the quoted sentence with the on-device idea model when it is ready.
+  if(modelState==='ready'){
+    try{
+      const plain=parseQuery(current.q).plain.trim(); const per=[]; const flatS=[];
+      rows.forEach(r=>{ const ss=r.none?[]:sentencesOf(passages[r.x.i].text).slice(0,12); per.push(ss.length); flatS.push(...ss) });
+      if(flatS.length){
+        const v=await embed([plain,...flatS]); if(my!==run) return;
+        const dot=(a,b)=>{let s=0; for(let d=0;d<D;d++) s+=v[a*D+d]*v[b*D+d]; return s};
+        const sims=[]; let o=1; per.forEach(n=>{ const arr=[]; for(let j=0;j<n;j++) arr.push(dot(0,o+j)); sims.push(arr); o+=n });
+        draw(sims);
+      }
+    }catch(e){}
+  }
+}
+function jumpTo(k){
+  if(k<0) return; setList(true);
+  let el=$('r'+(k+1));
+  if(!el&&$('sort').value==='source'){ const x=current.list[k]; const more=x&&document.querySelector('#g-'+x.src+' .more'); if(more){ more.click(); el=$('r'+(k+1)) } }
+  while(!el&&shown<k+1&&shown<current.list.length){ renderResults(false); el=$('r'+(k+1)) }
+  if(el){ el.scrollIntoView({behavior:'smooth',block:'start'}); el.classList.add('flash'); setTimeout(()=>el.classList.remove('flash'),1500) }
+}
+
+/* ---------- Keep the screen awake while books are prepared, and show overall progress ---------- */
+let wakeLock=null, ixRate=null, ixT0=0, ixW0=0, ixWins=0;
+async function keepAwake(on){
+  try{
+    if(on&&!wakeLock&&'wakeLock' in navigator&&document.visibilityState==='visible'){ wakeLock=await navigator.wakeLock.request('screen'); wakeLock.addEventListener('release',()=>{wakeLock=null}) }
+    else if(!on&&wakeLock){ await wakeLock.release(); wakeLock=null }
+  }catch(e){}
+}
+document.addEventListener('visibilitychange',()=>{ if(indexing&&document.visibilityState==='visible') keepAwake(true) });
+function renderIxAll(){
+  const el=$('ixAll'); const real=books.filter(b=>!b.sample);
+  const left=real.filter(b=>!isIndexed(b)&&!b.indexFailed);
+  if(!left.length||modelState!=='ready'){ el.hidden=true; return }
+  const tot=real.reduce((a,b)=>a+b.count,0)||1;
+  let done=real.filter(b=>isIndexed(b)).reduce((a,b)=>a+b.count,0);
+  for(const b of left){ const p=indexProgress.get(b.id); if(p) done+=p*b.count }
+  const f=done/tot; let eta='';
+  if(ixRate&&ixRate>0){ const mins=Math.round((tot-done)*1.6/ixRate/60); eta=mins>90?' · about '+Math.round(mins/60)+' h left':mins>1?' · about '+mins+' min left':' · almost done' }
+  el.innerHTML='<span>Preparing idea search: '+(real.length-left.length)+' of '+real.length+' books ready'+eta+'. Keep Maktaba open; the screen stays on.</span><div class="bar"><i style="width:'+Math.round(f*100)+'%"></i></div>';
+  el.hidden=false;
+}
+
+/* ---------- Sort several documents into a source at once ---------- */
+let sortMode=false; const picked=new Set();
+$('sortBtn').onclick=()=>{ sortMode=!sortMode; picked.clear(); renderShelf() };
+function renderSortBar(){
+  const bar=$('sortBar'); if(!sortMode){ bar.hidden=true; $('sortBtn').textContent='Sort documents'; return }
+  $('sortBtn').textContent='Done sorting';
+  bar.innerHTML=''; const t=document.createElement('span'); t.textContent=picked.size?picked.size+' selected · move to':'Tap documents to select them, then move them to a source.';
+  bar.appendChild(t);
+  if(picked.size){
+    const sel=document.createElement('select'); sel.id='moveTo'; sel.setAttribute('aria-label','Move to source');
+    for(const so of SOURCES){ const o=document.createElement('option'); o.value=so.id; o.textContent=so.label; sel.appendChild(o) }
+    const go=document.createElement('button'); go.className='btn small'; go.type='button'; go.textContent='Move';
+    go.onclick=async()=>{ for(const id of picked){ const b=books.find(x=>x.id===id); if(b){ b.source=sel.value; if(!b.sample) await store.put(b).catch(()=>{}) } } picked.clear(); renderShelf(); if($('q').value.trim()) doSearch() };
+    bar.append(sel,go);
+  }
+  bar.hidden=false;
+}
+
+/* ---------- Clean titles that are file paths ---------- */
+function niceTitle(t,file){
+  let x=(t||'').trim();
+  const bad=!x||/[\\/]/.test(x)||/\.(book|fm|pdf|docx?|indd|epub|txt)$/i.test(x)||/^(untitled|microsoft word)/i.test(x);
+  if(!bad&&!/_/.test(x)) return x;
+  if(!x||/^(untitled|microsoft word)/i.test(x)) x=file||x;
+  if(/[\\/]/.test(x)) x=x.split(/[\\/]/).filter(Boolean).pop()||x;
+  x=x.replace(/\.(book|fm|pdf|docx?|indd|epub|txt|md)$/i,'').replace(/_+/g,' ').replace(/\s{2,}/g,' ').trim();
+  return x||file||'Untitled';
+}
 
 /* ---------- Backup reminder ---------- */
 const NAG_KEY='maktaba.unsavedBooks';
@@ -758,7 +921,7 @@ async function updateNet(){
   const parts=[];
   parts.push(sw?'App saved for offline use':'App not yet saved for offline use');
   parts.push(modelState==='ready'||await modelCached()?'idea model on this device':'idea model not downloaded');
-  span.textContent='Version 5 · '+parts.join(' · ')+(navigator.onLine?'':' · offline now');
+  span.textContent='Version 6 · '+parts.join(' · ')+(navigator.onLine?'':' · offline now');
   el.classList.toggle('ok',!!sw&&(modelState==='ready'));
 }
 window.addEventListener('online',updateNet); window.addEventListener('offline',updateNet);
@@ -778,6 +941,7 @@ window.addEventListener('online',updateNet); window.addEventListener('offline',u
     const map=new Map(ps.map(p=>[p.bookId,p.list]));
     bs.sort((a,b)=>a.addedAt-b.addedAt);
     for(const b of bs){ const list=map.get(b.id)||[];
+      { const nt=niceTitle(b.title,b.file); if(nt!==b.title){ b.title=nt; store.put(b).catch(()=>{}) } }
       if(!b.source){ b.source=detectSource(b.title,b.file,list.slice(0,40).map(p=>p.text).join(' ')); store.put(b).catch(()=>{}) }
       books.push(b); list.forEach(p=>passages.push({bookId:b.id,...p})); selected.add(b.id) }
   }catch(e){}
