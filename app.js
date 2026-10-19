@@ -758,7 +758,7 @@ async function updateNet(){
   const parts=[];
   parts.push(sw?'App saved for offline use':'App not yet saved for offline use');
   parts.push(modelState==='ready'||await modelCached()?'idea model on this device':'idea model not downloaded');
-  span.textContent=parts.join(' · ')+(navigator.onLine?'':' · offline now');
+  span.textContent='Version 5 · '+parts.join(' · ')+(navigator.onLine?'':' · offline now');
   el.classList.toggle('ok',!!sw&&(modelState==='ready'));
 }
 window.addEventListener('online',updateNet); window.addEventListener('offline',updateNet);
