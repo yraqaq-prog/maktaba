@@ -423,6 +423,7 @@ function describe(b){ const d=b.docDate||b.fileDate; return [d?'dated '+fmtDate(
 /* ---------- Adding and removing books ---------- */
 function uid(){return Date.now().toString(36)+Math.random().toString(36).slice(2,8)}
 async function commitBook(book,list){
+  if(!book.sample) nagSet(nagGet()+1);
   if(usingSamples) clearSamples();
   await store.put(book,list).catch(()=>{});
   books.push(book); list.forEach(p=>passages.push({bookId:book.id,...p})); selected.add(book.id);
@@ -681,9 +682,9 @@ $('exportBtn').onclick=async()=>{
   const name='maktaba-library-'+new Date().toISOString().slice(0,10)+'.json';
   const file=new File([JSON.stringify(data)],name,{type:'application/json'});
   try{
-    if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:'Maktaba backup'}); return }
+    if(navigator.canShare&&navigator.canShare({files:[file]})){ await navigator.share({files:[file],title:'Maktaba backup'}); nagSet(0); return }
   }catch(e){ if(e&&e.name==='AbortError') return }
-  const a=document.createElement('a'); a.href=URL.createObjectURL(file); a.download=name; document.body.appendChild(a); a.click(); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove()},4000);
+  const a=document.createElement('a'); a.href=URL.createObjectURL(file); a.download=name; document.body.appendChild(a); a.click(); nagSet(0); setTimeout(()=>{URL.revokeObjectURL(a.href); a.remove()},4000);
 };
 $('importIn').onchange=async e=>{
   const f=e.target.files[0]; e.target.value=''; if(!f) return;
@@ -697,6 +698,20 @@ $('importIn').onchange=async e=>{
     $('storeNote').className='note'; $('storeNote').textContent='Restored '+added+' book'+(added===1?'':'s')+' from the backup.';
   }catch(err){ $('storeNote').textContent='That file isn’t a Maktaba backup.'; $('storeNote').className='note warn' }
 };
+
+
+/* ---------- Backup reminder ---------- */
+const NAG_KEY='maktaba.unsavedBooks';
+function nagGet(){ try{ return +(localStorage.getItem(NAG_KEY)||0) }catch(e){ return 0 } }
+function nagSet(n){ try{ localStorage.setItem(NAG_KEY,String(n)) }catch(e){} renderNag() }
+function renderNag(){
+  const el=document.getElementById('backupNag'); if(!el) return; const n=nagGet();
+  if(!n||usingSamples){ el.hidden=true; return }
+  el.innerHTML=''; const t=document.createElement('span');
+  t.textContent=(n===1?'1 document has':n+' documents have')+' been added since your last backup. ';
+  const b=document.createElement('button'); b.className='btn small'; b.type='button'; b.textContent='Save a backup now'; b.onclick=()=>$('exportBtn').click();
+  el.append(t,b); el.hidden=false;
+}
 
 /* ---------- Drag and drop ---------- */
 const drop=$('drop');
@@ -762,7 +777,7 @@ window.addEventListener('online',updateNet); window.addEventListener('offline',u
   for(const b of books){ if(b.sample) continue;
     try{ const segs=await store.vecsOf(b.id); let st={data:new Int8Array(0),scale:new Float32Array(0),owner:new Int32Array(0)};
       for(const s of segs) st=concatVec(st,s); if(b.indexed) st.complete=true; if(st.owner.length) vecs.set(b.id,st) }catch(e){} }
-  renderShelf();
+  renderShelf(); renderNag();
   if($('q').value) doSearch();
   if(await modelCached()) loadModel(); else renderModel();
   updateNet();

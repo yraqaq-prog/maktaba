@@ -1,5 +1,5 @@
 // Keeps the app working with no internet. The idea model itself is cached separately by the model library.
-const VERSION='maktaba-v2';
+const VERSION='maktaba-v3';
 const FILES=['./','index.html','app.js','embed-worker.js','manifest.webmanifest','icon-192.png','icon-512.png','apple-touch-icon.png',
   'pdf.min.js','pdf.worker.min.js','jszip.min.js','mammoth.browser.min.js','transformers.min.js',
   'ort-wasm-simd-threaded.jsep.mjs','ort-wasm-simd-threaded.jsep.wasm'];
