@@ -43,7 +43,7 @@ const $=id=>document.getElementById(id);
 const SOURCES=[
   {id:'ram',label:'Royal Air Maroc'},
   {id:'boeing',label:'Boeing 737'},
-  {id:'dgac',label:'DGAC Morocco'},
+  {id:'dgac',label:'Moroccan CAA (DGAC)'},
   {id:'icao',label:'ICAO'},
   {id:'easa',label:'EASA'},
   {id:'faa',label:'FAA'},
@@ -634,11 +634,19 @@ function claudePrompt(){
   const block=groups.map(({so,ks})=>'=== '+so.label+' ===\n'+ks.map(k=>{const p=passages[list[k].i], b=books.find(b=>b.id===p.bookId); return '['+(k+1)+'] ('+(b?b.title:'')+', '+p.loc+')\n'+p.text.slice(0,1100)}).join('\n\n')).join('\n\n');
   const owned=new Set(books.filter(b=>selected.has(b.id)).map(b=>b.source||'other'));
   const missing=SOURCES.filter(so=>owned.has(so.id)&&!groups.some(g=>g.so.id===so.id)).map(so=>so.label);
-  return 'I am an airline pilot (Boeing 737, Royal Air Maroc). Here are passages from my own document library about: "'+current.q+'".\n'+
-'They are grouped by source in my order of authority: Royal Air Maroc → Boeing 737 → DGAC Morocco → ICAO → EASA → FAA → UK CAA → other airlines → unsorted → background knowledge (textbooks).\n'+
-(missing.length?'Sources in my library with no matching passage: '+missing.join(', ')+'.\n':'')+
-'\nAnswer in the language of my topic, with one section per source in that order:\n- What the source says.\n- Any procedure or checklist: its steps in the original order and wording.\n- Limitations, figures and conditions exactly as written.\n- Definitions, briefly.\nCite passage numbers like [12]. Then "Differences between sources" and "Not found".\n'+
-'Use ONLY these passages. Do not add steps, numbers or procedures from general knowledge. If a checklist looks cut off, say so and give the reference.\n\n'+block;
+  return 'You are an experienced airline training captain. I am a Boeing 737 pilot at Royal Air Maroc. Using ONLY the passages below from my own document library, give me a briefing on: "'+current.q+'".\n'+
+'Sources, in my order of authority: '+SOURCES.filter(s=>s.id!=='other').map(s=>s.label).join(' → ')+'.\n'+
+(missing.length?'Sources in my library with nothing on this: '+missing.join(', ')+'.\n':'')+
+'\nAnswer in the language of my question, with these sections (skip one only if there is nothing for it):\n'+
+'## The big picture: 5 to 8 points a pilot must know, most safety-critical first.\n'+
+'## Royal Air Maroc: company policy, procedures, checklists, reporting.\n'+
+'## Boeing 737: checklists by name, memory items and steps in exact order and wording, and Boeing’s reasons.\n'+
+'## Regulators: Moroccan CAA (DGAC), then ICAO, then EASA, then FAA and UK CAA.\n'+
+'## How other airlines do it: how their checklists or procedures differ, and why it matters.\n'+
+'## Background: why it happens (textbooks).\n'+
+'## Watch out for: conflicts, stricter rules, traps.\n'+
+'## Not in my library.\n'+
+'Rules: use ONLY these passages, never add steps, numbers or procedures from general knowledge; cite passage numbers like [12]; copy checklist steps and figures exactly; if a checklist looks cut off, say so. Be concise: the best information, not everything.\n\n'+block;
 }
 $('claudeBtn').onclick=async()=>{
   const txt=claudePrompt(), note=$('claudeNote');
