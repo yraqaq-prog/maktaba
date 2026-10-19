@@ -1,0 +1,170 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<title>Maktaba</title>
+<meta name="theme-color" content="#1F5C4E">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Maktaba">
+<meta name="apple-mobile-web-app-status-bar-style" content="default">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="apple-touch-icon" href="apple-touch-icon.png">
+<link rel="icon" href="icon-192.png">
+<style>
+/* Layout: a reading room. The shelf (your books) on the left, the search desk and the passages it finds on the right. */
+:root{
+  --paper:#F3F5F1; --surface:#FFFFFF; --ink:#1C2321; --muted:#5D6863; --line:#D9DFD9;
+  --accent:#1F5C4E; --accent-soft:#E2EEE9; --on-accent:#FFFFFF;
+  --mark:#FFE37D; --mark-ink:#1C2321; --warn:#9A4A12; --warn-soft:#FBEBDD; --idea:#5B4BA6; --idea-soft:#ECE9F8;
+  --f-read:ui-serif,"New York","Iowan Old Style",Georgia,"Geeza Pro","Noto Naskh Arabic",serif;
+  --f-ui:-apple-system,system-ui,"Segoe UI",Roboto,"Geeza Pro",sans-serif;
+  --f-ar:"Geeza Pro","Noto Naskh Arabic","Arabic Typesetting",serif;
+  --f-mono:ui-monospace,"SF Mono",Menlo,Consolas,monospace;
+  color-scheme:light;
+}
+@media (prefers-color-scheme: dark){:root{
+  --paper:#111615; --surface:#19201E; --ink:#E5EAE7; --muted:#9AA6A0; --line:#2B3431;
+  --accent:#72C6AC; --accent-soft:#1F332D; --on-accent:#0D1513;
+  --mark:rgba(255,212,84,.34); --mark-ink:#FFF6D8; --warn:#F2A46B; --warn-soft:#352419; --idea:#B3A7F2; --idea-soft:#262240; color-scheme:dark}}
+*{box-sizing:border-box}
+html{-webkit-text-size-adjust:100%}
+body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--f-ui);font-size:15px;line-height:1.5;
+  padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));
+  padding-top:max(20px,env(safe-area-inset-top,0px));padding-bottom:max(48px,env(safe-area-inset-bottom,0px))}
+button,input,select{font:inherit;color:inherit}
+button{cursor:pointer}
+[hidden]{display:none!important}
+:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.app{max-width:1240px;margin:0 auto;display:grid;grid-template-columns:300px minmax(0,1fr);gap:28px;align-items:start}
+@media (max-width:860px){.app{grid-template-columns:minmax(0,1fr)}}
+.brand{display:flex;align-items:baseline;gap:10px;margin:0 0 4px}
+.brand h1{font-family:var(--f-read);font-weight:600;font-size:30px;letter-spacing:-.01em;margin:0}
+.brand .ar{font-family:var(--f-ar);font-size:22px;color:var(--accent)}
+.net{font-size:12px;color:var(--muted);display:flex;gap:6px;align-items:center}
+.net i{width:7px;height:7px;border-radius:50%;background:var(--muted);display:inline-block}
+.net.ok i{background:#2E9B62}
+.shelf{position:sticky;top:max(16px,env(safe-area-inset-top,0px));display:flex;flex-direction:column;gap:14px}
+@media (max-width:860px){.shelf{position:static}}
+.label{font-size:11.5px;font-weight:600;letter-spacing:.08em;text-transform:uppercase;color:var(--muted)}
+.shelf-head{display:flex;justify-content:space-between;align-items:baseline}
+.drop{display:block;border:1.5px dashed var(--line);border-radius:10px;padding:16px;text-align:center;background:var(--surface)}
+.drop.over{border-color:var(--accent);background:var(--accent-soft)}
+.drop p{margin:6px 0 0;font-size:12.5px;color:var(--muted)}
+.btn{border:1px solid var(--line);background:var(--surface);border-radius:8px;padding:7px 12px;font-size:14px;font-weight:500;display:inline-block}
+.btn:hover{border-color:var(--accent)}
+.btn.primary{background:var(--accent);color:var(--on-accent);border-color:var(--accent)}
+.btn.small{padding:4px 9px;font-size:12.5px}
+.btn.ghost{background:transparent;border-color:transparent;color:var(--muted)}
+.btn.ghost:hover{color:var(--ink);border-color:var(--line)}
+.btn[disabled]{opacity:.5;cursor:default}
+.jobs{display:flex;flex-direction:column;gap:6px}
+.job{font-size:12.5px;background:var(--surface);border:1px solid var(--line);border-radius:8px;padding:8px 10px}
+.bar{height:4px;background:var(--line);border-radius:2px;margin-top:6px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--accent);width:0;transition:width .2s}
+.job.err{border-color:var(--warn);background:var(--warn-soft);color:var(--warn)}
+.books{list-style:none;margin:0;padding:0;display:flex;flex-direction:column;border-top:1px solid var(--line)}
+.book{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:10px;align-items:start;padding:10px 2px;border-bottom:1px solid var(--line)}
+.book input[type=checkbox]{margin-top:4px;accent-color:var(--accent);width:18px;height:18px}
+.book .t{font-family:var(--f-read);font-size:15px;line-height:1.3;overflow-wrap:anywhere}
+.book .m{font-family:var(--f-mono);font-size:11px;color:var(--muted);margin-top:2px}
+.book .ix{font-size:11.5px;color:var(--idea);margin-top:2px}
+.book .rename{width:100%;font-family:var(--f-read);font-size:14px;padding:2px 4px;border:1px solid var(--accent);border-radius:4px;background:var(--surface)}
+.sample-tag{font-family:var(--f-ui);font-size:10px;font-weight:600;letter-spacing:.06em;text-transform:uppercase;color:var(--warn);background:var(--warn-soft);border-radius:4px;padding:1px 5px;margin-inline-start:4px;vertical-align:2px}
+.shelf-foot{display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.note{font-size:12.5px;color:var(--muted);margin:0}
+.note.warn{color:var(--warn)}
+.desk{display:flex;flex-direction:column;gap:14px;min-width:0}
+.searchbox{display:flex;gap:8px;background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:6px}
+.searchbox:focus-within{border-color:var(--accent)}
+.searchbox input{flex:1;min-width:0;border:0;background:transparent;font-family:var(--f-read);font-size:19px;padding:8px 10px;outline:none}
+.controls{display:flex;flex-wrap:wrap;gap:10px 18px;align-items:center}
+.seg{display:inline-flex;border:1px solid var(--line);border-radius:8px;overflow:hidden;background:var(--surface)}
+.seg button{border:0;background:transparent;padding:6px 12px;font-size:13.5px;color:var(--muted)}
+.seg button[aria-pressed="true"]{background:var(--accent);color:var(--on-accent)}
+.chk{display:inline-flex;gap:6px;align-items:center;font-size:13.5px;color:var(--muted)}
+.chk input{accent-color:var(--accent)}
+select{border:1px solid var(--line);border-radius:8px;padding:5px 8px;background:var(--surface);font-size:13.5px}
+.tips{font-size:12.5px;color:var(--muted)}
+.tips code{font-family:var(--f-mono);font-size:12px;background:var(--accent-soft);color:var(--ink);padding:0 4px;border-radius:3px}
+.banner{background:var(--warn-soft);color:var(--warn);border-radius:10px;padding:10px 14px;font-size:13.5px}
+.model{background:var(--idea-soft);border-radius:12px;padding:14px 16px;display:flex;flex-wrap:wrap;gap:10px 16px;align-items:center;justify-content:space-between}
+.model p{margin:0;font-size:13.5px;max-width:60ch}
+.model .btn.primary{background:var(--idea);border-color:var(--idea);color:#fff}
+.model .bar{flex-basis:100%}
+.model .bar i{background:var(--idea)}
+.status{display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;border-bottom:1px solid var(--line);padding-bottom:10px}
+.status b{font-variant-numeric:tabular-nums}
+.results{display:flex;flex-direction:column;gap:12px}
+.pass{background:var(--surface);border:1px solid var(--line);border-radius:12px;padding:14px 18px 12px}
+.pass header{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:baseline;justify-content:space-between;margin-bottom:6px}
+.ref{font-family:var(--f-mono);font-size:12px;color:var(--muted);display:flex;gap:8px;flex-wrap:wrap;align-items:baseline;min-width:0}
+.ref .n{color:var(--accent);font-weight:500}
+.ref .bt{font-family:var(--f-read);font-size:14px;color:var(--ink);font-style:italic;overflow-wrap:anywhere}
+.tags{display:flex;gap:4px}
+.tag{font-size:11.5px;font-weight:600;border-radius:999px;padding:1px 9px;white-space:nowrap}
+.tag.w{background:var(--accent-soft);color:var(--accent)}
+.tag.i{background:var(--idea-soft);color:var(--idea)}
+.text{font-family:var(--f-read);font-size:16.5px;line-height:1.7;overflow-wrap:anywhere;unicode-bidi:plaintext}
+.text[dir="rtl"]{font-family:var(--f-ar);font-size:18px;line-height:1.9}
+.ctx{color:var(--muted);font-size:14.5px;border-inline-start:2px solid var(--line);padding-inline-start:12px;margin:8px 0}
+mark{background:var(--mark);color:var(--mark-ink);border-radius:2px;padding:0 1px}
+.pass footer{display:flex;gap:4px;margin-top:8px;flex-wrap:wrap}
+.empty{background:var(--surface);border:1px dashed var(--line);border-radius:12px;padding:28px;text-align:center;color:var(--muted)}
+.more{align-self:center}
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="shelf" aria-label="Your books">
+    <div>
+      <div class="brand"><h1>Maktaba</h1><span class="ar" lang="ar">مكتبة</span></div>
+      <div class="net" id="net"><i></i><span>Checking offline setup…</span></div>
+    </div>
+    <div class="banner" id="installTip" hidden>To use Maktaba offline, tap the Share button, then <b>Add to Home Screen</b>, and open it from that icon. Books added here in Safari stay in Safari.</div>
+    <div class="shelf-head"><span class="label">Your shelf</span><span class="note" id="shelfCount"></span></div>
+    <label class="drop" id="drop" for="fileIn">
+      <span class="btn primary">Add books</span>
+      <p>PDF, EPUB, Word (.docx), TXT or Markdown. On iPad, tap Browse to pick from GoodReader or Files.</p>
+      <input type="file" id="fileIn" multiple accept=".pdf,.epub,.docx,.txt,.md,.markdown,.html,.htm,application/pdf,application/epub+zip" hidden>
+    </label>
+    <div class="jobs" id="jobs"></div>
+    <ul class="books" id="books"></ul>
+    <div class="shelf-foot">
+      <button class="btn small" id="allBooks" type="button">Search all books</button>
+      <button class="btn small" id="exportBtn" type="button">Save a backup</button>
+      <label class="btn small" for="importIn">Restore backup</label>
+      <input type="file" id="importIn" accept=".json,application/json" hidden>
+    </div>
+    <p class="note" id="storeNote">Your books are kept on this device only. Nothing is uploaded.</p>
+  </aside>
+
+  <main class="desk">
+    <form class="searchbox" id="form" role="search">
+      <input id="q" type="search" placeholder="Search a word, a phrase, or an idea…" autocomplete="off" dir="auto" aria-label="Search your books" enterkeyhint="search">
+      <button class="btn primary" type="submit">Search</button>
+    </form>
+    <div class="controls">
+      <div class="seg" role="group" aria-label="Search type">
+        <button type="button" id="modeWords" aria-pressed="false">Exact words</button>
+        <button type="button" id="modeIdeas" aria-pressed="true">Words + ideas</button>
+      </div>
+      <label class="chk"><input type="checkbox" id="allWords"> Every word must appear</label>
+      <label class="chk">Order <select id="sort"><option value="best">Best match</option><option value="book">Book order</option></select></label>
+    </div>
+    <div class="tips">Use <code>"patience at work"</code> for an exact phrase and <code>-anger</code> to leave a word out. Idea search also finds passages that say the same thing in other words or another language.</div>
+    <div class="model" id="modelCard" hidden>
+      <p id="modelText">Idea search runs on this device with a small AI model. Download it once (about 120 MB, best on Wi-Fi). After that it works with no internet.</p>
+      <button class="btn primary" id="modelBtn" type="button">Download idea model</button>
+      <div class="bar" id="modelBar" hidden><i></i></div>
+    </div>
+    <div class="banner" id="sampleBanner" hidden>You are looking at three short sample books so you can try the search. Add your own books and the samples disappear.</div>
+    <div class="status" id="status" hidden><div id="count"></div><div class="note" id="work"></div></div>
+    <div class="results" id="results"></div>
+    <button class="btn more" id="moreBtn" type="button" hidden>Show more passages</button>
+  </main>
+</div>
+<script src="app.js"></script>
+</body>
+</html>

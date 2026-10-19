@@ -1,0 +1,14 @@
+{
+  "name": "Maktaba",
+  "short_name": "Maktaba",
+  "description": "Search every passage of your personal library, by word or by idea, offline.",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#F3F5F1",
+  "theme_color": "#1F5C4E",
+  "icons": [
+    {"src": "icon-192.png", "sizes": "192x192", "type": "image/png"},
+    {"src": "icon-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable"}
+  ]
+}
