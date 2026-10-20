@@ -182,6 +182,7 @@ const store={db:null,ok:false,
   async put(book,list){ if(!this.ok) return; const t=this.db.transaction(['books','passages'],'readwrite'); t.objectStore('books').put(book); if(list) t.objectStore('passages').put({bookId:book.id,list}); return this.done(t) },
   async putVec(rec){ if(!this.ok) return; const t=this.db.transaction('vectors','readwrite'); t.objectStore('vectors').put(rec); return this.done(t) },
   async vecsOf(id){ if(!this.ok) return []; const r=await this.req(this.db.transaction('vectors').objectStore('vectors').index('book').getAll(id)); return r.sort((a,b)=>a.seg-b.seg) },
+  async delVecs(id){ if(!this.ok) return; const t=this.db.transaction('vectors','readwrite'); const vs=t.objectStore('vectors'); const keys=await this.req(vs.index('book').getAllKeys(id)); keys.forEach(k=>vs.delete(k)); return this.done(t) },
   async del(id){ if(!this.ok) return; const t=this.db.transaction(['books','passages','vectors'],'readwrite'); t.objectStore('books').delete(id); t.objectStore('passages').delete(id);
     const vs=t.objectStore('vectors'); const keys=await this.req(vs.index('book').getAllKeys(id)); keys.forEach(k=>vs.delete(k)); return this.done(t) },
 };
@@ -189,32 +190,54 @@ const store={db:null,ok:false,
 /* ---------- Idea model (runs on this device in a worker) ---------- */
 const MODEL_FILE='paraphrase-multilingual-MiniLM-L12-v2/resolve/main/onnx/model_quantized.onnx';
 const D=384, SEG=256;
-let worker=null, modelState='absent', nextId=1; const pending=new Map();
+let modelState='absent', nextId=1; const pending=new Map();
 let vecs=new Map();      // bookId -> {data:Int8Array, scale:Float32Array, owner:Int32Array}
 let indexing=false, indexProgress=new Map();
+/* Several copies of the model run side by side, one per spare processor core. */
+const IOS=/iPad|iPhone|iPod/.test(navigator.userAgent)||(navigator.platform==='MacIntel'&&navigator.maxTouchPoints>1);
+// If a previous run with helper copies never confirmed it was fine (for example the app was closed for memory), use one copy.
+let POOL_MAX0=0;
+let POOL_MAX=Math.max(1,Math.min(IOS?2:3,(navigator.hardwareConcurrency||2)-1));
+try{ const v=localStorage.getItem('maktaba.pool'); if(v==='trying'){ localStorage.setItem('maktaba.pool','single'); POOL_MAX=1 } else if(v==='single') POOL_MAX=1 }catch(e){}
+function poolMark(v){ try{ localStorage.setItem('maktaba.pool',v) }catch(e){} }
+const pool=[]; // {w, busy, ready}
 
 async function modelCached(){
   try{ if(!('caches' in self)) return false; const c=await caches.open('transformers-cache'); const ks=await c.keys(); return ks.some(r=>r.url.includes(MODEL_FILE)) }catch(e){ return false }
 }
-function startWorker(){
-  if(worker) return;
-  worker=new Worker('embed-worker.js',{type:'module'});
-  worker.onmessage=e=>{
+function spawn(primary){
+  const slot={w:new Worker('embed-worker.js',{type:'module'}),busy:0,ready:false};
+  slot.w.onmessage=e=>{
     const m=e.data;
-    if(m.type==='progress'){ const f=m.total?m.loaded/m.total:0; $('modelBar').hidden=false; $('modelBar').firstElementChild.style.width=Math.round(f*100)+'%';
+    if(m.type==='progress'){ if(!primary) return; const f=m.total?m.loaded/m.total:0; $('modelBar').hidden=false; $('modelBar').firstElementChild.style.width=Math.round(f*100)+'%';
       $('modelText').textContent='Downloading the idea model… '+Math.round(m.loaded/1048576)+' of '+Math.round((m.total||0)/1048576)+' MB. Keep this screen open.'; return }
-    if(m.type==='ready'){ modelState='ready'; renderModel(); indexLoop(); return }
+    if(m.type==='ready'){ slot.ready=true;
+      if(primary){ modelState='ready'; renderModel();
+        if(POOL_MAX>1){ let v=null; try{ v=localStorage.getItem('maktaba.pool') }catch(e){}
+          if(v!=='ok') poolMark('trying');
+          for(let i=1;i<POOL_MAX;i++) spawn(false);
+          setTimeout(()=>{ if(pool.length>1) poolMark('ok') },30000) }
+        indexLoop() }
+      return }
     const p=pending.get(m.id);
-    if(m.type==='vecs'&&p){ pending.delete(m.id); p.res(m.data); return }
+    if(m.type==='vecs'&&p){ pending.delete(m.id); slot.busy--; p.res(m.data); return }
     if(m.type==='error'){
-      if(p){ pending.delete(m.id); p.rej(new Error(m.message)) }
-      else { modelState='error'; renderModel(m.message) }
+      if(p){ pending.delete(m.id); slot.busy--; p.rej(new Error(m.message)) }
+      else if(primary){ modelState='error'; renderModel(m.message) }
+      else { const i=pool.indexOf(slot); if(i>0) pool.splice(i,1); slot.w.terminate() } // a helper copy failed (e.g. low memory): carry on with fewer
     }
   };
-  worker.onerror=e=>{ modelState='error'; renderModel(e.message||'The idea model could not start on this device.') };
+  slot.w.onerror=e=>{ if(primary){ modelState='error'; renderModel(e.message||'The idea model could not start on this device.') } else { const i=pool.indexOf(slot); if(i>0) pool.splice(i,1) } };
+  pool.push(slot); slot.w.postMessage({type:'load'});
+  return slot;
 }
-function loadModel(){ startWorker(); modelState='loading'; renderModel(); worker.postMessage({type:'load'}) }
-function embed(texts){ return new Promise((res,rej)=>{ const id=nextId++; pending.set(id,{res,rej}); worker.postMessage({type:'embed',id,texts}) }) }
+function loadModel(){ if(!pool.length) spawn(true); else pool[0].w.postMessage({type:'load'}); modelState='loading'; renderModel() }
+function embed(texts){
+  return new Promise((res,rej)=>{
+    const ready=pool.filter(x=>x.ready); const slot=(ready.length?ready:pool).reduce((a,b)=>b.busy<a.busy?b:a);
+    const id=nextId++; pending.set(id,{res,rej}); slot.busy++; slot.w.postMessage({type:'embed',id,texts});
+  });
+}
 function renderModel(err){
   const card=$('modelCard'), btn=$('modelBtn');
   if(modelState==='ready'){ card.hidden=true; updateNet(); return }
@@ -227,17 +250,25 @@ function renderModel(err){
 $('modelBtn').onclick=()=>loadModel();
 
 /* Split a passage into overlapping windows short enough for the model (about 70 words each). */
+/* One piece per passage (the model reads about 100 words anyway). Pages with no real sentences are skipped. */
+function isJunk(text){
+  const letters=(text.match(/\p{L}/gu)||[]).length; if(letters<40) return true;
+  const dots=(text.match(/[\d.·…_]/g)||[]).length; if(dots/text.length>.33) return true;
+  const up=(text.match(/\p{Lu}/gu)||[]).length; if(up/letters>.75&&text.length<500) return true;
+  if(/list of effective pages|record of revisions|table of contents|intentionally left blank|table des mati[eè]res|liste des pages effectives/i.test(text)&&!/[a-z]{3,}[^.]{20,}\./.test(text.replace(/\b[A-Z ]{6,}\b/g,''))) return true;
+  return false;
+}
 function windowsOf(text){
+  if(isJunk(text)) return [];
   const ws=text.split(/\s+/).filter(Boolean);
-  if(ws.length<=80) return [ws.join(' ')];
-  const out=[]; for(let i=0;i<ws.length;i+=60){ out.push(ws.slice(i,i+70).join(' ')); if(i+70>=ws.length) break } return out;
+  return [ws.slice(0,80).join(' ')];
 }
 const isIndexed=b=>b.sample?!!(vecs.get(b.id)&&vecs.get(b.id).complete):!!b.indexed;
 async function indexLoop(){
   if(indexing||modelState!=='ready') return; indexing=true; keepAwake(true); ixT0=performance.now(); ixWins=0;
   try{
     for(;;){
-      const b=books.find(b=>!isIndexed(b)&&!b.indexFailed); if(!b) break;
+      const b=books.filter(b=>!isIndexed(b)&&!b.indexFailed).sort((a,c)=>(SRC_RANK[a.source]??8)-(SRC_RANK[c.source]??8)||(a.addedAt||0)-(c.addedAt||0))[0]; if(!b) break;
       try{ await indexBook(b) }catch(e){ b.indexFailed=true; console.error(e) }
       renderShelf();
     }
@@ -247,19 +278,27 @@ async function indexBook(b){
   const locals=byBook.get(b.id)||[]; const wins=[];
   locals.forEach((gi,li)=>windowsOf(passages[gi].text).forEach(t=>wins.push([li,t])));
   let st=vecs.get(b.id)||{data:new Int8Array(0),scale:new Float32Array(0),owner:new Int32Array(0)};
+  if(!b.sample&&b.ixv!==2){ // started with the older, slower method: start this book again with the new one
+    if(st.owner.length){ st={data:new Int8Array(0),scale:new Float32Array(0),owner:new Int32Array(0)}; vecs.delete(b.id); await store.delVecs(b.id).catch(()=>{}) }
+    b.ixv=2; await store.put(b).catch(()=>{});
+  }
   const start=st.owner.length;
   for(let s=start;s<wins.length;s+=SEG){
     const part=wins.slice(s,s+SEG), n=part.length;
     const data=new Int8Array(n*D), scale=new Float32Array(n), owner=new Int32Array(n);
-    for(let k=0;k<n;k+=16){
+    for(let k=0;k<n;){
       if(!books.includes(b)) return;
-      const batch=part.slice(k,k+16), f=await embed(batch.map(w=>w[1]));
-      for(let j=0;j<batch.length;j++){
-        let mx=1e-9; for(let d=0;d<D;d++){const v=Math.abs(f[j*D+d]); if(v>mx) mx=v}
-        const sc=127/mx; scale[k+j]=sc; owner[k+j]=batch[j][0];
-        for(let d=0;d<D;d++) data[(k+j)*D+d]=Math.round(f[j*D+d]*sc);
+      const P=Math.max(1,pool.filter(x=>x.ready).length), jobs=[];
+      for(let w=0;w<P&&k+w*32<n;w++){ const kk=k+w*32, batch=part.slice(kk,kk+32); jobs.push(embed(batch.map(x=>x[1])).then(f=>({kk,batch,f}))) }
+      for(const {kk,batch,f} of await Promise.all(jobs)){
+        for(let j=0;j<batch.length;j++){
+          let mx=1e-9; for(let d=0;d<D;d++){const v=Math.abs(f[j*D+d]); if(v>mx) mx=v}
+          const sc=127/mx; scale[kk+j]=sc; owner[kk+j]=batch[j][0];
+          for(let d=0;d<D;d++) data[(kk+j)*D+d]=Math.round(f[j*D+d]*sc);
+        }
+        indexProgress.set(b.id,Math.min(1,(s+kk+batch.length)/wins.length)); renderIndexBadge(b);
       }
-      indexProgress.set(b.id,(s+k+batch.length)/wins.length); renderIndexBadge(b);
+      k+=32*jobs.length;
       await tick();
     }
     if(!books.includes(b)) return;
@@ -489,7 +528,7 @@ function ixText(b){
   const p=indexProgress.get(b.id); return p!=null?'Preparing idea search… '+Math.round(p*100)+'%':'Waiting for idea search…';
 }
 let ixLastDraw=0;
-function renderIndexBadge(b){ const el=document.querySelector('[data-ix="'+b.id+'"]'); if(el) el.textContent=ixText(b); ixWins+=16; const dt=(performance.now()-ixT0)/1000; if(dt>20) ixRate=ixWins/dt; if(performance.now()-ixLastDraw>3000){ ixLastDraw=performance.now(); renderIxAll() } }
+function renderIndexBadge(b){ const el=document.querySelector('[data-ix="'+b.id+'"]'); if(el) el.textContent=ixText(b); ixWins+=32; const dt=(performance.now()-ixT0)/1000; if(dt>20) ixRate=ixWins/dt; if(performance.now()-ixLastDraw>3000){ ixLastDraw=performance.now(); renderIxAll() } }
 function renderShelf(){
   renderSortBar(); renderIxAll();
   const ul=$('books'); ul.innerHTML='';
@@ -837,7 +876,7 @@ function renderIxAll(){
   let done=real.filter(b=>isIndexed(b)).reduce((a,b)=>a+b.count,0);
   for(const b of left){ const p=indexProgress.get(b.id); if(p) done+=p*b.count }
   const f=done/tot; let eta='';
-  if(ixRate&&ixRate>0){ const mins=Math.round((tot-done)*1.6/ixRate/60); eta=mins>90?' · about '+Math.round(mins/60)+' h left':mins>1?' · about '+mins+' min left':' · almost done' }
+  if(ixRate&&ixRate>0){ const mins=Math.round((tot-done)*.85/ixRate/60); eta=mins>90?' · about '+Math.round(mins/60)+' h left':mins>1?' · about '+mins+' min left':' · almost done' }
   el.innerHTML='<span>Preparing idea search: '+(real.length-left.length)+' of '+real.length+' books ready'+eta+'. Keep Maktaba open; the screen stays on.</span><div class="bar"><i style="width:'+Math.round(f*100)+'%"></i></div>';
   el.hidden=false;
 }
@@ -921,7 +960,7 @@ async function updateNet(){
   const parts=[];
   parts.push(sw?'App saved for offline use':'App not yet saved for offline use');
   parts.push(modelState==='ready'||await modelCached()?'idea model on this device':'idea model not downloaded');
-  span.textContent='Version 6 · '+parts.join(' · ')+(navigator.onLine?'':' · offline now');
+  span.textContent='Version 7 · '+parts.join(' · ')+(navigator.onLine?'':' · offline now');
   el.classList.toggle('ok',!!sw&&(modelState==='ready'));
 }
 window.addEventListener('online',updateNet); window.addEventListener('offline',updateNet);

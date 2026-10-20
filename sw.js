@@ -1,6 +1,6 @@
 // Keeps the app working with no internet.
 // Small app files are checked online first (so updates arrive at once); the big libraries are kept and never re-downloaded.
-const APP='maktaba-app-v6', LIBS='maktaba-libs-v1';
+const APP='maktaba-app-v7', LIBS='maktaba-libs-v1';
 const APP_FILES=['./','index.html','app.js','embed-worker.js','manifest.webmanifest','icon-192.png','icon-512.png','apple-touch-icon.png'];
 const LIB_FILES=['pdf.min.js','pdf.worker.min.js','jszip.min.js','mammoth.browser.min.js','transformers.min.js','ort-wasm-simd-threaded.jsep.mjs','ort-wasm-simd-threaded.jsep.wasm'];
 self.addEventListener('install',e=>{ e.waitUntil((async()=>{
